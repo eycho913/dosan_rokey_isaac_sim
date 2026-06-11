@@ -1,0 +1,31 @@
+--- /home/rokey/dev_ws/coupang_ws/scripts/replay_and_capture.py
++++ /home/rokey/dev_ws/coupang_ws/scripts/replay_and_capture.py
+@@ -87,6 +87,7 @@
+     return cam_paths
+ 
+ def replay_and_capture():
++    print("[TRACE] Entering replay_and_capture"); sys.stdout.flush()
+     os.makedirs(args_cli.output_dir, exist_ok=True)
+     
+     sim_cfg = sim_utils.SimulationCfg(
+@@ -101,16 +102,19 @@
+             use_gpu=False, # Explicitly disable GPU PhysX
+         )
+     )
++    print("[TRACE] Created SimulationCfg"); sys.stdout.flush()
+     sim = sim_utils.SimulationContext(sim_cfg)
+     sim.set_camera_view([2.5, 0.0, 4.0], [0.0, 0.0, 0.0])
+     
++    print("[TRACE] Created SimulationContext"); sys.stdout.flush()
+     scene_cfg = StandaloneSceneCfg(num_envs=1, env_spacing=2.0)
+     robot_cfg = deepcopy(FFW_SH5_CFG)
+     robot_cfg.spawn.usd_path = FFW_SH5_CFG.spawn.usd_path
+     robot_cfg.spawn.rigid_props.disable_gravity = True
+     robot_cfg.init_state.pos = cfg.ROBOT_POS
+     scene_cfg.robot = robot_cfg.replace(prim_path="{ENV_REGEX_NS}/Robot")
+     
++    print("[TRACE] Creating InteractiveScene"); sys.stdout.flush()
+     scene = InteractiveScene(scene_cfg)
++    print("[TRACE] Calling sim.reset()"); sys.stdout.flush()
+     sim.reset()
++    print("[TRACE] sim.reset() done"); sys.stdout.flush()

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 대용량 데이터 파일 (GitHub 100MB 제한)
+*.hdf5
+*.hdf
+*.h5
+*.usd
+*.usda
+*.usdc
+*.usdz
+
+# 모델 체크포인트
+*.pth
+*.pt
+*.ckpt
+*.pkl
+
+# 임시/로그
+*.log
+*.tmp
+/tmp/
+.cache/
+
+# Isaac Sim
+_isaac_sim/
+omni.isaac.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
