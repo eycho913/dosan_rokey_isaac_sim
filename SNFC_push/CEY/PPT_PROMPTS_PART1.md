@@ -9,7 +9,7 @@ Create a clean and professional slide with a dark navy background (#1A237E).
 At the center, place the following text:
 - Main Title (large, white, bold): "SH5 쌍팔 로봇 물류 자동화 시스템"
 - Subtitle (medium, light blue): "Isaac Sim 기반 모방학습 Pick & Place 시연"
-- Below subtitle (small, gray): "기간: 2026.05.26 ~ 2026.06.12 | 담당: 최은예"
+- Below subtitle (small, gray): "기간: 2026.05.26 ~ 2026.06.12 | 담당: 조의연"
 - Bottom right corner: Project logo placeholder
 
 ---
