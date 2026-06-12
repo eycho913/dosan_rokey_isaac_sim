@@ -1,0 +1,21 @@
+ 데이터 검증
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/check_success.py \
+  --hdf5 /home/rokey/dev_ws/datasets/train_data/slot3_2.hdf5 \
+  --target_z 0.64 \
+  --target_y -1.05484
+리플레이
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/replay_data.py --hdf5 /home/rokey/dev_ws/datasets/train_data/slot3_2.hdf5 --episode 107 --enable_gravity  이
+
+slot1_1 
+89
+
+
+slot2_1
+40
+
+slot3_2  X
+107
+
+slot4_1
+39
+

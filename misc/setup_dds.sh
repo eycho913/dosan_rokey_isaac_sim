@@ -1,0 +1,5 @@
+#!/bin/bash
+export CYCLONEDDS_HOME=/home/rokey/dev_ws/install/cyclonedds
+export CMAKE_PREFIX_PATH=$CYCLONEDDS_HOME:$CMAKE_PREFIX_PATH
+export LD_LIBRARY_PATH=$CYCLONEDDS_HOME/lib:$LD_LIBRARY_PATH
+export PATH=$CYCLONEDDS_HOME/bin:$PATH

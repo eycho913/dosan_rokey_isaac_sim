@@ -1,0 +1,48 @@
+1 터미널
+cd dev_ws/coupang_ws/
+# Slot1 데이터 수집
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/coupang_sh5_bringup.py \
+  --enable_environment --enable_camera_views --enable_gravity --slot 1
+
+# Slot2 데이터 수집
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/coupang_sh5_bringup.py \
+  --enable_environment --enable_camera_views --enable_gravity --slot 2
+
+ 비전 수정
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/coupang_sh5_bringup_v.py --enable_environment --enable_camera_views --enable_gravity --slot 1
+
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/coupang_sh5_bringup_v.py --enable_environment --enable_camera_views --enable_gravity --slot 2
+
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/coupang_sh5_bringup_v.py --enable_environment --enable_camera_views --enable_gravity --slot 3
+
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/coupang_sh5_bringup_v.py --enable_environment --enable_camera_views --enable_gravity --slot 4
+
+ 옵션 B로 수정 될까?
+
+2 터미널
+docker exec -it ai_worker bash
+
+export ROS_DOMAIN_ID=119
+ros2 launch cyclo_motion_controller_ros ai_worker_controller.launch.py   controller_type:=vr hand:=true
+
+3 터미널
+docker exec -it robotis-applications bash
+
+ros2 run robotis_vuer vr_publisher_sh5   --ros-args   -p enable_vr_image:=true   -p enable_vr_image_raw:=true   -p vr_image_left_topic:=/leader/left_camera/image_raw   -p vr_image_right_topic:=/leader/right_camera/image_raw
+
+
+리플레이
+
+isaac-python scripts/replay_data.py   --hdf5 /home/rokey/dev_ws/datasets/slot2_2_coupang_demo_20260609_155258.hdf5   --episode 0 --enable_gravity
+
+리플레이 기반 데이터 수집
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/replay_and_capture.py --input_dir /home/rokey/dev_ws/datasets
+
+비전 모델 통합 학습
+python3 /home/rokey/dev_ws/coupang_ws/scripts/train_act_v.py --data /home/rokey/dev_ws/datasets/vision --output vision_act_policy.pth --slot 1
+
+
+모델 테스트
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/eval_bc.py \
+  --model /home/rokey/dev_ws/models/slot1_act_policy.pth
+

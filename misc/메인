@@ -1,0 +1,33 @@
+터미널 1 (ros2 통신 브릿지)
+# 1. 환경변수 로드 (dev_ws 폴더 기준)
+source /opt/ros/humble/setup.bash
+source /home/rokey/dev_ws/install/setup.bash
+
+# 2. 브릿지 다시 실행
+python3 /home/rokey/dev_ws/coupang_ws/scripts/ros2_sh5_bridge.py
+
+
+터미널 2 (isaac sim 실행 터미널)
+
+isaac-python /home/rokey/dev_ws/coupang_ws/scripts/sh5_bringup_ros2_3robot.py
+
+# DESPAWN 테스트
+echo '{"workstation_id":"WS02","location":"sg2_in_01_A","action":"DESPAWN"}' >> /tmp/sh5_ws_trigger.jsonl
+
+# SPAWN 테스트  
+echo '{"workstation_id":"WS02","location":"sg2_in_01_A","action":"SPAWN"}' >> /tmp/sh5_ws_trigger.jsonl
+
+
+bash ~/dev_ws/coupang_ws/scripts/send_packages.sh 1 5
+
+/home/rokey/dev_ws/coupang_ws/scripts/test_trigger.sh
+
+
+# sg2_in_01 테스트
+echo '{"package_id":"PKG_010","qr_id":"QR_010","customer_id":"CUST_A4","target_line":"sg2_in_01"}' >> /tmp/sh5_queue.jsonl
+
+# sg2_in_02 테스트
+echo '{"package_id":"PKG_011","qr_id":"QR_011","customer_id":"CUST_B2","target_line":"sg2_in_02"}' >> /tmp/sh5_queue.jsonl
+
+# sg2_in_03 테스트
+echo '{"package_id":"PKG_012","qr_id":"QR_012","customer_id":"CUST_C1","target_line":"sg2_in_03"}' >> /tmp/sh5_queue.jso12
