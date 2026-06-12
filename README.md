@@ -4,6 +4,17 @@
 
 ---
 
+## 🌟 SH5 Vision ACT 모방 학습 시스템 가이드
+본 프로젝트는 **ROBOTIS AI_WORKER 오픈소스**를 기반으로 커스터마이징된 Vision ACT (Action Chunking with Transformers) 모방 학습 파이프라인을 포함하고 있습니다.
+- **다중 카메라 (TopView + Left/Right) 및 156차원 상태 공간 데이터 수집/학습**
+- **4개 슬롯 통합 Goal Conditioning 알고리즘 적용**
+- **HDF5 재생 시 Teleport를 이용한 100% 시각적 물리 안정성 확보**
+
+자세한 아키텍처, ROBOTIS 오픈소스 연동 방법, 데이터 파이프라인 및 실행 가이드는 아래 문서를 참고하세요:
+👉 **[SH5 Vision ACT 모방 학습 시스템 상세 가이드 (md_file/SH5_VISION_ACT_SYSTEM.md)](md_file/SH5_VISION_ACT_SYSTEM.md)**
+
+---
+
 ## 📋 목차
 
 1. [시스템 개요](#시스템-개요)
