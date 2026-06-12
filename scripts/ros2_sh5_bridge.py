@@ -22,7 +22,8 @@ QUEUE_FILE      = "/tmp/sh5_queue.jsonl"      # bridge → Isaac (트리거)
 QR_REQ_FILE     = "/tmp/sh5_qr_req.jsonl"     # Isaac → bridge (QR 확인 요청)
 QR_RESULT_FILE  = "/tmp/sh5_qr_result.jsonl"  # bridge → Isaac (DB 체크 결과)
 REPORT_REQ_FILE = "/tmp/sh5_report_req.jsonl" # Isaac → bridge (입고 보고)
-PAUSE_FILE      = "/tmp/sh5_pause.json"       # bridge → Isaac (일시정지 신호)
+PAUSE_FILE_TEMPLATE = "/tmp/sh5_pause_{robot_id}.json" # 라인별 개별 pause 파일
+PAUSE_FILE          = "/tmp/sh5_pause.json"             # 전체 공통 폴백(하위호환)
 
 # 폴즈 대상 로봇 ID 리스트 (관제탑이 /{robot_id}/pause_status 주제)
 PAUSE_ROBOT_IDS  = ["sg2_in_01", "sg2_in_02", "sg2_in_03"]
@@ -43,9 +44,11 @@ class BridgeNode(Node):
         with open(QR_REQ_FILE,     "w") as f: pass
         with open(QR_RESULT_FILE,  "w") as f: pass
         with open(REPORT_REQ_FILE, "w") as f: pass
-        # 폰즈 파일 초기화 (false = 재개 상태)
-        with open(PAUSE_FILE, "w") as f:
-            json.dump({"paused": False}, f)
+        # 라인별 pause 파일 전체 초기화 (false = 재개 상태)
+        for robot_id in PAUSE_ROBOT_IDS:
+            pf = PAUSE_FILE_TEMPLATE.format(robot_id=robot_id)
+            with open(pf, "w") as f:
+                json.dump({"paused": False}, f)
 
         self._check_client  = None
         self._report_client = None
@@ -55,33 +58,42 @@ class BridgeNode(Node):
 
         self.create_subscription(String, "/sim/sg2_spawn_trigger", self._on_trigger, 10)
 
-        # pause_status 구독 (/{robot_id}/pause_status)
+        # pause_status 구독 (/{robot_id}/pause_status) — 라인별 개별 파일에 쓰기
         for robot_id in PAUSE_ROBOT_IDS:
             pause_topic = f"/{robot_id}/pause_status"
-            self.create_subscription(Bool, pause_topic, self._on_pause, 10)
+            callback = self._make_pause_callback(robot_id)  # ← 라인 ID 바인딩
+            self.create_subscription(Bool, pause_topic, callback, 10)
             self.get_logger().info(f"[Bridge] 폰즈 리스너: {pause_topic}")
 
         self.get_logger().info("[Bridge] ✅ 시작")
         self.get_logger().info(f"  트리거 : {QUEUE_FILE}")
         self.get_logger().info(f"  QR요청 : {QR_REQ_FILE}  →  {QR_RESULT_FILE}")
         self.get_logger().info(f"  보고   : {REPORT_REQ_FILE}")
-        self.get_logger().info(f"  폰즈   : {PAUSE_FILE} (토픽: {PAUSE_ROBOT_IDS})")
+        self.get_logger().info(f"  폰즈   : {PAUSE_FILE_TEMPLATE} (\ub77c\uc778\ubcc4 \uac1c\ubcc4, \ud1a0\ud53d: {PAUSE_ROBOT_IDS})")
 
         self._report_pos = 0
         self._qr_req_pos = 0
         threading.Thread(target=self._poll_report_requests, daemon=True).start()
         threading.Thread(target=self._poll_qr_requests,    daemon=True).start()
 
-    def _on_pause(self, msg: Bool):
-        """pause_status 토픽 콜백 → /tmp/sh5_pause.json 업데이트"""
-        paused = bool(msg.data)
-        with open(PAUSE_FILE, "w") as f:
-            json.dump({"paused": paused}, f)
-        status = "🔴 일시정지" if paused else "🟢 재개"
-        print(f"\n[Bridge] ━━━━ ⏸️  pause_status ━━━━")
-        print(f"         상태: {status}")
-        print(f"         파일: {PAUSE_FILE}")
-        print(f"[Bridge] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+    def _make_pause_callback(self, robot_id: str):
+        """라인별 pause 콜백 팩토리 — robot_id를 클로저로 바인딩"""
+        pause_file = PAUSE_FILE_TEMPLATE.format(robot_id=robot_id)
+
+        def _on_pause(msg: Bool):
+            paused = bool(msg.data)
+            # 1) 라인별 전용 파일에 쓰기
+            with open(pause_file, "w") as f:
+                json.dump({"paused": paused}, f)
+            status = "🔴 일시정지" if paused else "🟢 재개"
+            print(f"\n[Bridge] ━━━━ ⏸️  pause_status ━━━━")
+            print(f"         라인  : {robot_id}")
+            print(f"         상태  : {status}")
+            print(f"         파일  : {pause_file}")
+            print(f"[Bridge] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+        return _on_pause
+
 
 
     # ── check_warehouse_status ────────────────────────────────────────────

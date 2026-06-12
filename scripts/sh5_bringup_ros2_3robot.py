@@ -59,7 +59,8 @@ QUEUE_FILE      = "/tmp/sh5_queue.jsonl"       # bridge → Isaac Sim (트리거
 QR_REQ_FILE     = "/tmp/sh5_qr_req.jsonl"      # Isaac Sim → bridge (QR 확인 요청)
 QR_RESULT_FILE  = "/tmp/sh5_qr_result.jsonl"   # bridge → Isaac Sim (DB 체크 결과)
 REPORT_REQ_FILE = "/tmp/sh5_report_req.jsonl"  # Isaac Sim → bridge (입고 보고)
-PAUSE_FILE      = "/tmp/sh5_pause.json"         # bridge → Isaac Sim (일시정지 신호)
+PAUSE_FILE_TEMPLATE = "/tmp/sh5_pause_{line_id}.json"  # 라인별 개별 pause (전체 동시정지 방지)
+PAUSE_FILE          = "/tmp/sh5_pause.json"             # 하위 호환: 브릿지가 아직 라인별 파일 미지원 시 폴백
 BOX_DESPAWN_POS = (0.0, 0.0, -10.0)
 SKIP_FRAMES     = 1
 MAX_SLOTS       = 8    # 앞뒷면 총 8칸
@@ -69,7 +70,7 @@ DB_WAIT_TIMEOUT = 5.0
 PLACEMENT_FREEZE_FRAMES = 30
 CAMERA_SKIP_FRAMES = 3
 HOMING_FRAMES      = 120
-PLAYBACK_SPEED     = 2    # 재생 배속 (1=원속, 2=2배속, 4=4배속)
+PLAYBACK_SPEED     = 4    # 재생 배속 (1=원속, 2=2배속, 4=4배속)
                           # 너무 크면 움직임이 끊겨보임 → 권장: 2~4
 
 # [Fix 1] 재생 시작 시 현재 자세 → 첫 프레임까지 부드럽게 보간하는 워밍업 프레임 수
@@ -116,12 +117,106 @@ WORKSTATION_PRIM_PATTERN = [
     RACK_PREFIX + "{loc}",
     "/World/envs/env_0/FinalFac/{loc}",
 ]
+
+# ── [6/8 초기 이월 재고 상태] ─────────────────────────────────────────────────
+# init_june_8th_state.py 기반: 시뮬레이터 시작 시 이월 상자를 슬롯에 미리 배치
+# 실제 작업대 슬롯 좌표 — finalfac.usd 씬 좌표에 맞게 수정 필요
+# 형식: (x, y, z) — 각 슬롯의 월드 좌표
+def _auto_detect_slot_positions(line_id: str, num_slots: int = 5) -> dict:
+    """
+    HDF5 frozen_set 에피소드의 box_trajectory 마지막 프레임에서
+    슬롯별 최종 박스 배치 좌표를 자동 추출합니다.
+
+    [핵심 수정]
+    HDF5 slot 번호(1~4)는 팔 포지션(상단좌/우, 하단좌/우)이며
+    라인 번호(sg2_in_01/02/03)와 무관합니다.
+    각 라인의 로봇 스폰 위치를 기준으로 오프셋을 보정하여
+    올바른 월드 좌표를 계산합니다.
+
+    매핑:
+      sg2_in_01 → RACK_02 : LINE_ROBOT_POS["sg2_in_01"] 기준
+      sg2_in_02 → RACK_03 : LINE_ROBOT_POS["sg2_in_02"] 기준
+      sg2_in_03 → RACK_04 : LINE_ROBOT_POS["sg2_in_03"] 기준
+
+    반환: {슬롯번호: (x, y, z), ...}
+    """
+    robot_pos = np.array(LINE_ROBOT_POS.get(line_id, (0.0, 0.0, 0.0)), dtype=np.float32)
+    result = {}
+
+    if not FROZEN_SET_DIR.exists():
+        print(f"  [AutoSlot] frozen_set 없음 → {line_id} 좌표 자동추출 불가")
+        return result
+
+    # ★ 슬롯 1~4 HDF5 고정 사용 (LINE_TO_SLOT과 무관)
+    for s in range(1, min(num_slots, 4) + 1):
+        files = sorted(FROZEN_SET_DIR.glob(f"slot{s}_*.hdf5"))
+        if not files:
+            print(f"  [AutoSlot] slot{s}_*.hdf5 없음 → 스킵")
+            continue
+        try:
+            with h5py.File(random.choice(files), "r") as f:
+                demo_keys = list(f["data"].keys())
+                demo = f["data"][random.choice(demo_keys)]
+                box_traj   = np.array(demo["obs"]["box_pose"])
+                robot_traj = np.array(demo["obs"]["robot_pose"])
+
+                final_box     = box_traj[-1, :3]      # 최종 안착 위치 (학습 좌표계)
+                initial_robot = robot_traj[0, :3]     # 학습 시 로봇 초기 위치
+
+                # 현재 씬 로봇 위치 - 학습 시 로봇 위치 = 변위 오프셋
+                offset      = robot_pos[:3] - initial_robot[:3]
+                final_world = final_box + offset
+                result[s]   = tuple(final_world.tolist())
+                print(f"  [AutoSlot] {line_id}(RACK_{WS_LOCATION_TO_RACK.get(line_id+'_A','?')[-2:]}) "
+                      f"슬롯{s} → ({final_world[0]:.2f}, {final_world[1]:.2f}, {final_world[2]:.2f})")
+        except Exception as e:
+            print(f"  [AutoSlot] {line_id} 슬롯{s} 추출 실패: {e}")
+
+    # num_slots=5이면 슬롯5는 슬롯4 위치에서 +0.3m 위로 추정 (5번째 칸)
+    if num_slots >= 5 and 4 in result:
+        x, y, z = result[4]
+        result[5] = (x, y, z + 0.30)
+        print(f"  [AutoSlot] {line_id} 슬롯5 추정(슬롯4+0.3m): ({x:.2f}, {y:.2f}, {z+0.30:.2f})")
+
+    return result
+
+
+
+
+# 슬롯 좌표: 런타임에 HDF5에서 자동 추출 (spawn_initial_stock 내부에서 호출)
+# 직접 입력 불필요!
+JUNE8_SLOT_POSITIONS = {}  # spawn_initial_stock()에서 자동 채워짐
+
+
+# 이월 재고 패키지 데이터 (init_june_8th_state.py 그대로)
+JUNE8_INITIAL_STOCK = {
+    "sg2_in_01": [
+        {"package_id": "PKG_20260607_008", "customer_name": "오주원", "slot": 1},
+        {"package_id": "PKG_20260607_009", "customer_name": "최지민", "slot": 2},
+        {"package_id": "PKG_20260607_017", "customer_name": "박윤서", "slot": 3},
+        {"package_id": "PKG_20260607_018", "customer_name": "정민준", "slot": 4},
+        {"package_id": "PKG_20260607_020", "customer_name": "최지후", "slot": 5},
+    ],
+    "sg2_in_02": [
+        {"package_id": "PKG_20260607_001", "customer_name": "정서준", "slot": 1},
+        {"package_id": "PKG_20260607_006", "customer_name": "박민서", "slot": 2},
+        {"package_id": "PKG_20260607_011", "customer_name": "홍하은", "slot": 3},
+        {"package_id": "PKG_20260607_014", "customer_name": "황하준", "slot": 4},
+        {"package_id": "PKG_20260607_019", "customer_name": "강다은", "slot": 5},
+    ],
+}
 # X축 -90도 회전 quaternion (QR이 위를 보도록) - (w, x, y, z)
 BOX_SPAWN_QUAT  = [0.7071, -0.7071, 0.0, 0.0]
 
 LINE_TO_SLOT = {"sg2_in_01": 1, "sg2_in_02": 2, "sg2_in_03": 3}
-WORKSTATION_ID = {"sg2_in_01": "WS01", "sg2_in_02": "WS02", "sg2_in_03": "WS03"}
-WORKSTATION_QR = {"sg2_in_01": "WS_QR_01", "sg2_in_02": "WS_QR_02", "sg2_in_03": "WS_QR_03"}
+# ★ init_june_8th_state.py DB 매핑과 일치해야 함
+# WS01 = stage_01 (출고 대기 창고) → 입고 라인 아님!
+# WS02 = sg2_in_01_A (1번 입고 라인)
+# WS03 = sg2_in_02_A (2번 입고 라인)
+# WS04 = sg2_in_03_A (3번 입고 라인)
+WORKSTATION_ID = {"sg2_in_01": "WS02", "sg2_in_02": "WS03", "sg2_in_03": "WS04"}
+WORKSTATION_QR = {"sg2_in_01": "WORKSTATION_WS02", "sg2_in_02": "WORKSTATION_WS03", "sg2_in_03": "WORKSTATION_WS04"}
+
 
 # ★ 라인별 로봇 스폰 위치 (씬 좌표에 맞게 조정)
 LINE_ROBOT_POS = {
@@ -523,12 +618,14 @@ class ReplayController:
         "IDLE", "SCANNING", "WAITING_DB", "REPLAYING", "HOMING", "DONE"
 
     def __init__(self, robot: RobotAdapter, scene, slot_registry: SlotRegistry,
-                 robot_key: str = "robot01", box_key: str = "box01"):
+                 robot_key: str = "robot01", box_key: str = "box01",
+                 line_id: str = "sg2_in_01"):
         self.robot         = robot
         self.scene         = scene
         self.slot_reg      = slot_registry
         self._robot_key    = robot_key
         self._box_key      = box_key
+        self._line_id_key  = line_id   # pause 파일 구분용 (self._line_id는 작업 중 변경됨)
         self._box_prim_path = f"/World/envs/env_0/{box_key[0].upper()}{box_key[1:]}"
         self.state         = self.IDLE
         self.episode       = None
@@ -584,22 +681,38 @@ class ReplayController:
         return self.state != self.IDLE
 
     def _is_paused(self) -> bool:
-        """pause 파일 폴링 (브릿지가 /{robot_id}/pause_status 수신 시 업데이트)"""
+        """
+        라인별 개별 pause 파일 폴링.
+        우선순위:
+          1. /tmp/sh5_pause_{line_id}.json  (라인별 개별 제어)
+          2. /tmp/sh5_pause.json            (전체 공통 폴백 — 브릿지 미지원 시)
+        두 파일 중 하나라도 paused=True 면 이 로봇만 정지.
+        """
+        paused = False
+        # 1) 라인별 전용 파일 우선
+        line_pause_file = PAUSE_FILE_TEMPLATE.format(line_id=self._line_id_key)
         try:
-            with open(PAUSE_FILE, "r") as f:
+            with open(line_pause_file, "r") as f:
                 paused = json.load(f).get("paused", False)
+        except FileNotFoundError:
+            # 2) 폴백: 전체 공통 파일
+            try:
+                with open(PAUSE_FILE, "r") as f:
+                    paused = json.load(f).get("paused", False)
+            except Exception:
+                paused = False
         except Exception:
             paused = False
 
-        # 상태가 변경됐을 때만 터미널 출력
         prev = getattr(self, "_prev_paused", None)
         if prev != paused:
             self._prev_paused = paused
             now = time.strftime("%H:%M:%S")
+            tag = f"[{self._line_id_key}]"
             if paused:
-                print(f"\n[{now}] ⏸  pause_status = TRUE  → 작업 일시정지 (작업대 만석/회전 대기)")
+                print(f"\n[{now}] {tag} ⏸  pause_status = TRUE  → 이 라인만 일시정지")
             else:
-                print(f"\n[{now}] ▶  pause_status = FALSE → 작업 재개")
+                print(f"\n[{now}] {tag} ▶  pause_status = FALSE → 이 라인 재개")
         return paused
 
     # ── Kinematic 박스 포즈 전용 쓰기 ─────────────────────────────────────────
@@ -764,9 +877,12 @@ class ReplayController:
                 # ATTACH_FACTOR: 0=HDF5 원본 위치, 1=로봇 링크 완전 중심
                 #   값이 작을수록 손에서 멀어지고, 클수록 링크 중심에 가까워짐
                 # ─────────────────────────────────────────────────────────────
-                ATTACH_FACTOR     = 1.0   # 오프셋 0 = 링크 콘터에 완전 부착
-                GRASP_DIST        = 0.30  # 실제 손 접근 시 스냅 조기 활성화 (0.15 → 0.30으로 늘려 딩레이 감소)
-                FINGER_OPEN_THRESH = 0.80  # joint_pos 기준 손가락 열림 판정 (rad)
+                # ATTACH_FACTOR 제거 — 파지 시작 순간 실제 오프셋을 그대로 보존
+                GRASP_DIST        = 0.02  # 손 접근 거리 임계값 (m)
+                                          # ↑ 작을수록 스냅 시 local_off 작아짐 → Z 오프셋 감소
+                                          # 단, 너무 작으면(< 0.08) 스냅 자체가 안 걸릴 수 있음
+                                          # 권장 범위: 0.10 ~ 0.15
+                FINGER_CLOSED_THRESH = 0.10  # 손가락 닫힘 판정: joint_pos 평균 < 이 값이면 닫힘
                 MAX_BOX_STEP      = 3.0   # 속도 클램프 (사실상 해제 → 즉시 반응)
 
                 if bt is not None and self.frame_idx < len(bt):
@@ -790,7 +906,8 @@ class ReplayController:
                     else:
                         finger_pos_avg = 0.0
 
-                    fingers_open   = finger_pos_avg < FINGER_OPEN_THRESH
+                    # 손가락 닫힘(파지 중) 판정: 평균 joint_pos 가 임계값 미만이면 닫힌 상태
+                    fingers_open   = finger_pos_avg > FINGER_CLOSED_THRESH
                     is_hdf5_grasped = hasattr(self, "_hdf5_grasp_body_idx")
 
                     # HDF5 박스 위치 기준으로 가장 가까운 로봇 링크 찾기 (올바른 손 식별)
@@ -808,22 +925,28 @@ class ReplayController:
                                             vz+wq*tz+xq*ty-yq*tx])
 
                     if not fingers_open and (is_hdf5_grasped or closest_dist < GRASP_DIST):
-                        # ── Phase B: 파지 중 ── HDF5 가이드 Snapping
+                        # ── Phase B: 파지 중 ── 손 링크 기준 로컬 오프셋 유지
                         if not is_hdf5_grasped:
-                            # 파지 시작: 오프셋 저장 (HDF5 위치 기준)
+                            # 파지 시작: HDF5 박스 위치와 손 링크 위치의 차이를
+                            # 손 링크의 로컬 좌표계로 변환해서 저장
                             self._hdf5_grasp_body_idx = closest_idx
                             body_q = robot_body_quat[closest_idx]
+                            # 쿼터니언 역회전: 월드→로컬
                             inv_q  = torch.stack([body_q[0], -body_q[1], -body_q[2], -body_q[3]])
                             world_off = hdf5_pos - robot_body_pos[closest_idx]
-                            # ATTACH_FACTOR로 상자를 손 안쪽으로 당기기
-                            self._hdf5_grasp_local_off = _qr(inv_q, world_off) * (1.0 - ATTACH_FACTOR)
+                            # ★ ATTACH_FACTOR 없이 실제 오프셋 그대로 보존
+                            self._hdf5_grasp_local_off = _qr(inv_q, world_off)
+                            print(f"  [Snap] 파지 시작: body#{closest_idx}, "
+                                  f"local_off=({world_off[0]:.3f},{world_off[1]:.3f},{world_off[2]:.3f})")
 
                         idx    = self._hdf5_grasp_body_idx
                         body_q = robot_body_quat[idx]
+                        # 로컬 오프셋을 월드 좌표로 역변환해 상자 위치 결정
                         target_pos = robot_body_pos[idx] + _qr(body_q, self._hdf5_grasp_local_off)
                     else:
                         # ── Phase A/C: 컨베이어 위 또는 해제 후 ──
                         if is_hdf5_grasped:
+                            print(f"  [Snap] 파지 해제 (finger_avg={finger_pos_avg:.3f})")
                             del self._hdf5_grasp_body_idx, self._hdf5_grasp_local_off
                         target_pos = hdf5_pos
 
@@ -957,8 +1080,18 @@ class ReplayController:
                 "filled_slots_count": self._slot,  # 누적 카운트가 아닌 슬롯 고유 번호(1~8) 전송
             })
             print(f"  [Ctrl] 보고 기록 완료 → {self._pkg_id} 슬롯{self._slot}")
-            # 다음 상자 스폰을 위해 kinematic 리셋은 새 스폰 시점에 수행
+            # ── 처리 완료 상자 숨김 (Z=-10) ──────────────────────────────
+            # 다음 패키지 스폰 전까지 바닥에 보이지 않도록 이동
+            # (물리 설정 변경 없음 — 위치만 이동, 치명적 문제 없음)
+            try:
+                hide_pos  = torch.tensor([0.0, 0.0, -10.0], dtype=torch.float32)
+                hide_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32)
+                self._write_box_pose(hide_pos, hide_quat)
+                print(f"  [Ctrl] 📦 상자 숨김 완료 (Z=-10)")
+            except Exception as e:
+                print(f"  [Ctrl] 상자 숨김 실패 (무시): {e}")
             self.state = self.IDLE
+
 
     def _after_qr_known(self):
         """QR 스캔 완료 후: bridge에 check 요청 또는 바로 진행"""
@@ -1030,6 +1163,88 @@ class ReplayController:
             if hasattr(self, "_prev_box_pos_w"): del self._prev_box_pos_w  # 속도 클램프 리셋
             total = len(ep.get("joint_trajectory", []))
             print(f"\n[Replay] 🎬 {self._pkg_id} | 슬롯{self._slot} | {total}프레임 (워밍업 {WARMUP_FRAMES}f)")
+
+# ── [6/8 이월 재고] 시작 시 작업대에 기존 상자 배치 ──────────────────────────
+def slug_pkg(pkg_id: str) -> str:
+    """prim path 호환 슬러그: PKG_20260607_008 → PKG_20260607_008"""
+    return pkg_id.replace("-", "_")
+
+
+def spawn_initial_stock(sim, scene, controllers: dict):
+    """
+    init_june_8th_state.py 기반: 시뮬레이터 시작 시 WS02/WS03에
+    이월 상자 5개씩을 미리 스폰하고, SlotRegistry를 사전 등록합니다.
+      - WS02 (sg2_in_01): 이월 5판 (슬롯 1~5 채움)
+      - WS03 (sg2_in_02): 이월 5판 (슬롯 1~5 채움)
+      - WS04 (sg2_in_03): 0판 (슬롯 1부터 시작)
+    """
+    print("\n" + "="*60)
+    print("  [이월 재고] 6월 8일 초기 상태 로딩 중...")
+    print("="*60)
+
+    usd_candidates = list(BOX_ASSETS_DIR.glob("*.usd")) if BOX_ASSETS_DIR.exists() else []
+
+    try:
+        import omni.usd
+        from pxr import UsdGeom, Gf
+        stage = omni.usd.get_context().get_stage()
+    except Exception as e:
+        print(f"  [이월 재고] USD stage 접근 실패: {e}")
+        stage = None
+
+    for line_id, stock_list in JUNE8_INITIAL_STOCK.items():
+        ctrl = controllers.get(line_id)
+        if ctrl is None:
+            continue
+
+        # ★ HDF5에서 슬롯 좌표 자동 추출 (직접 입력 불필요)
+        slot_positions = _auto_detect_slot_positions(line_id, num_slots=len(stock_list))
+        if not slot_positions:
+            print(f"  [이월] {line_id} 슬롯 좌표 추출 실패 → SlotRegistry만 등록")
+
+
+        for item in stock_list:
+            pkg_id    = item["package_id"]
+            cust_name = item["customer_name"]
+            slot_num  = item["slot"]
+
+            # (1) SlotRegistry 사전 등록: 이월 고객명 → 슬롯번호 매핑
+            ctrl.slot_reg._cust_to_slot[cust_name] = slot_num
+            ctrl.slot_reg._slot_counts[slot_num]   = ctrl.slot_reg._slot_counts.get(slot_num, 0) + 1
+
+            # (2) 슬롯 좌표에 USD Prim 직접 스폰 (Isaac Sim Stage에 배치)
+            pos_xyz = slot_positions.get(slot_num)
+            if pos_xyz is None:
+                print(f"  [이월] 주의: {line_id} 슬롯{slot_num} 좌표 미정의 → 미배치")
+                continue
+
+            if stage is not None:
+                usd_path = str(random.choice(usd_candidates)) if usd_candidates else None
+                prim_path = f"/World/envs/env_0/CarryStock_{slug_pkg(line_id)}_{slug_pkg(pkg_id)}"
+                try:
+                    prim = stage.DefinePrim(prim_path, "Xform")
+                    if usd_path:
+                        prim.GetReferences().AddReference(usd_path)
+                    xf = UsdGeom.Xformable(prim)
+                    xf.ClearXformOpOrder()
+                    xf.AddTranslateOp().Set(Gf.Vec3d(*pos_xyz))
+                    xf.AddOrientOp().Set(Gf.Quatd(0.7071, -0.7071, 0.0, 0.0))
+                    print(f"  [이월 스폰] {pkg_id} → {line_id} 슬롯{slot_num} @ {pos_xyz}")
+                except Exception as e:
+                    print(f"  [이월 스폰] 실패 ({pkg_id}): {e}")
+            else:
+                print(f"  [이월] stage 없음 → SlotRegistry만 등록: {pkg_id} 슬롯{slot_num}")
+
+        # (3) 이월 5칸 등록 완료 후 next_slot을 6으로 설정
+        occupied = len(stock_list)
+        ctrl.slot_reg._next = occupied + 1
+        if ctrl.slot_reg._next > ctrl.slot_reg._max:
+            ctrl.slot_reg._next = 1
+        print(f"  [{line_id}] SlotRegistry next_slot → {ctrl.slot_reg._next} (이월 {occupied}칸 완료)")
+
+    print("  [이월 재고] 로딩 완료 — WS02: 5판, WS03: 5판, WS04: 0판")
+    print("="*60 + "\n")
+
 
 # ── HDF5 로드 ─────────────────────────────────────────────────────────────
 def _load_episode(slot: int) -> dict | None:
@@ -1200,13 +1415,16 @@ def main():
         robot_i = scene[rk]
         adp_i   = RobotAdapter(robot_i)
         slr_i   = SlotRegistry(max_slots=MAX_SLOTS)
-        ctrl_i  = ReplayController(adp_i, scene, slr_i, robot_key=rk, box_key=bk)
+        ctrl_i  = ReplayController(adp_i, scene, slr_i, robot_key=rk, box_key=bk, line_id=line_id)
         ctrl_i.set_camera(scene["topview_camera"])
         ctrl_i.set_home_pos(robot_i.data.default_joint_pos, home_base_pos=list(pos))
         line_queues[line_id] = queue.Queue()
         controllers[line_id] = ctrl_i
 
     sim_dt = sim.get_physics_dt()
+
+    # ── [6/8 이월 재고] 시뮬레이터 시작 시 기존 상자 배치 ──────────────────────────────
+    spawn_initial_stock(sim, scene, controllers)
 
     print("\n" + "="*60)
     print("  SH5 HDF5 Replay + ROS2 v3  ─  3-Robot Mode")
